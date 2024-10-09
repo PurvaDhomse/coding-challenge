@@ -1,0 +1,403 @@
+const mongoose = require('mongoose');
+
+const transactionSchema = new mongoose.Schema({
+    productTitle: { type: String, required: true },
+    productDescription: { type: String, required: true },
+    dateOfSale: { type: Date, required: true },
+    price: { type: Number, required: true },
+    category: { type: String, required: true },
+    sold: { type: Boolean, required: true }
+});
+
+const Transaction = mongoose.model('Transaction', transactionSchema);
+
+module.exports = Transaction;
+
+
+
+
+const express = require('express');
+const axios = require('axios');
+const Transaction = require('../models/Transaction');
+const router = express.Router();
+
+// Middleware to validate month
+const validateMonth = (req, res, next) => {
+    const month = parseInt(req.query.month);
+    if (month < 1 || month > 12) {
+        return res.status(400).json({ message: 'Invalid month. It should be between 1 and 12.' });
+    }
+    next();
+};
+
+// API to initialize the database
+router.get('/initialize', async (req, res) => {
+    try {
+        const response = await axios.get('https://s3.amazonaws.com/roxiler.com/product_transaction.json');
+        const transactions = response.data.map(item => ({
+            productTitle: item.productTitle,
+            productDescription: item.productDescription,
+            dateOfSale:
+
+
+
+
+// Statistics API
+router.get('/statistics', validateMonth, async (req, res) => {
+    const { month } = req.query;
+
+    try {
+        const totalSold = await Transaction.countDocuments({
+            $expr: { $eq: [{ $month: "$dateOfSale" }, parseInt(month)] },
+            sold: true
+        });
+
+        const totalNotSold = await Transaction.countDocuments({
+            $expr: { $eq: [{ $month: "$dateOfSale" }, parseInt(month)] },
+            sold: false
+        });
+
+        const totalSales = await Transaction.aggregate([
+            { 
+                $match: { 
+                    $expr: { 
+                        $eq: [{ $month: "$dateOfSale" }, parseInt(month)] },
+                        sold: true 
+                    } 
+                },
+            },
+            { 
+                $group: { 
+                    _id: null, 
+                    totalAmount: { $sum: "$price" } 
+                } 
+            }
+        ]);
+
+        res.status(200).json({
+            totalSales: totalSales[0]?.totalAmount || 0,
+            totalSold,
+            totalNotSold,
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch statistics.', error });
+    }
+});
+
+
+
+// Bar Chart Data API
+router.get('/bar-chart', validateMonth, async (req, res) => {
+    const { month } = req.query;
+    
+    const ranges = [
+        { min: 0, max: 100 },
+        { min: 101, max: 200 },
+        { min: 201, max: 300 },
+        { min: 301, max: 400 },
+        { min: 401, max: 500 },
+        { min: 501, max: 600 },
+        { min: 601, max: 700 },
+        { min: 701, max: 800 },
+        { min: 801, max: 900 },
+        { min: 901, max: Infinity },
+    ];
+
+    try {
+        const barChartData = await Promise.all(ranges.map(async range => {
+            const count = await Transaction.countDocuments({
+                $expr: { $eq: [{ $month: "$dateOfSale" }, parseInt(month)] },
+                price: { $gte: range.min, $lte: range.max }
+            });
+            return { range: `${range.min}-${range.max}`, count };
+        }));
+
+        res.status(200).json(barChartData);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch bar chart data.', error });
+    }
+});
+
+
+// Pie Chart Data API
+router.get('/pie-chart', validateMonth, async (req, res) => {
+    const { month } = req.query;
+
+    try {
+        const categories = await Transaction.aggregate([
+            { 
+                $match: { 
+                    $expr: { 
+                        $eq: [{ $month: "$dateOfSale" }, parseInt(month)] } 
+                    } 
+                } 
+            },
+            { 
+                $group: { 
+                    _id: "$category", 
+                    count: { $sum: 1 } 
+                } 
+            }
+        ]);
+        
+        const formattedCategories = categories.map(cat => ({
+            category: cat._id,
+            count: cat.count
+        }));
+
+        res.status(200).json(formattedCategories);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch pie chart data.', error });
+    }
+});
+
+
+// Combined Data API
+router.get('/combined-data', validateMonth, async (req, res) => {
+    const { month } = req.query;
+
+    try {
+        // Fetch statistics
+        const stats = await Transaction.aggregate([
+            { 
+                $match: { 
+                    $expr: { 
+                        $eq: [{ $month: "$dateOfSale" }, parseInt(month)] }, 
+                        sold: true 
+                    } 
+                },
+            },
+            { 
+                $group: { 
+                    _id: null, 
+                    totalSales: { $sum: "$price" }, 
+                    totalSold: { $sum: { $cond: ["$sold", 1, 0] } },
+                    totalNotSold: { $sum: { $cond: ["$sold", 0, 1] } }
+                }
+            }
+        ]);
+
+        // Fetch bar chart data
+        const barChartData = await Promise.all(ranges.map(async range => {
+            const count = await Transaction.countDocuments({
+                $expr: { $eq: [{ $month: "$dateOfSale" }, parseInt(month)] },
+                price: { $gte: range.min, $lte: range.max }
+            });
+            return { range: `${range.min}-${range.max}`, count };
+        }));
+
+        // Fetch pie chart data
+        const categories = await Transaction.aggregate([
+            { 
+                $match: { 
+                    $expr: { 
+                        $eq: [{ $month: "$dateOfSale" }, parseInt(month)] } 
+                    } 
+                } 
+            },
+            { 
+                $group: { 
+                    _id: "$category", 
+                    count: { $sum: 1 } 
+                } 
+            }
+        ]);
+
+        // Format categories
+        const formattedCategories = categories.map(cat => ({
+            category: cat._id,
+            count: cat.count
+        }));
+
+        // Combine all results
+        const combinedResponse = {
+            statistics: {
+                totalSales: stats[0]?.totalSales || 0,
+                totalSold: stats[0]?.totalSold || 0,
+                totalNotSold: stats[0]?.totalNotSold || 0,
+            },
+            barChartData,
+            pieChartData: formattedCategories,
+        };
+
+        res.status(200).json(combinedResponse);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch combined data.', error });
+    }
+});
+
+
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+import TransactionsTable from './TransactionsTable';
+import Statistics from './Statistics';
+import BarChart from './BarChart';
+import PieChart from './PieChart';
+
+const TransactionsDashboard = () => {
+    const [month, setMonth] = useState(3); // March
+    const [stats, setStats] = useState({});
+    const [barData, setBarData] = useState([]);
+    const [pieData, setPieData] = useState([]);
+
+    useEffect(() => {
+        fetchStatistics();
+        fetchBarData();
+        fetchPieData();
+    }, [month]);
+
+    const fetchStatistics = async () => {
+        const response = await axios.get(`/api/statistics?month=${month}`);
+        setStats(response.data);
+    };
+
+    const fetchBarData = async () => {
+        const response = await axios.get(`/api/bar-chart?month=${month}`);
+        setBarData(response.data);
+    };
+
+    const fetchPieData = async () => {
+        const response = await axios.get(`/api/pie-chart?month=${month}`);
+        setPieData(response.data);
+    };
+
+    return (
+        <div>
+            <h1>Transactions Dashboard</h1>
+            <select onChange={(e) => setMonth(e.target.value)} value={month}>
+                {Array.from({ length: 12 }, (_, index) => (
+                    <option key={index} value={index + 1}>
+                        {new Date(0, index).toLocaleString('default', { month: 'long' })}
+                    </option>
+                ))}
+            </select>
+
+            <Statistics stats={stats} />
+            <TransactionsTable month={month} />
+            <BarChart data={barData} />
+            <PieChart data={pieData} />
+        </div>
+    );
+};
+
+export default TransactionsDashboard;
+
+
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+
+const TransactionsTable = ({ month }) => {
+    const [transactions, setTransactions] = useState([]);
+    const [search, setSearch] = useState('');
+    const [page, setPage] = useState(1);
+    const [totalCount, setTotalCount] = useState(0);
+    const perPage = 10;
+
+    useEffect(() => {
+        fetchTransactions();
+    }, [month, search, page]);
+
+    const fetchTransactions = async () => {
+        const response = await axios.get(`/api/transactions?month=${month}&search=${search}&page=${page}&perPage=${perPage}`);
+        setTransactions(response.data.transactions);
+        setTotalCount(response.data.totalCount);
+    };
+
+    const handleSearchChange = (e) => {
+        setSearch(e.target.value);
+        setPage(1); // Reset to first page on search
+    };
+
+    const nextPage = () => {
+        if (page * perPage < totalCount) {
+            setPage(page + 1);
+        }
+    };
+
+    const prevPage = () => {
+        if (page > 1) {
+            setPage(page - 1);
+        }
+    };
+
+    return (
+        <div>
+            <input
+                type="text"
+                placeholder="Search Transactions..."
+                value={search}
+                onChange={handleSearchChange}
+            />
+            <table>
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Description</th>
+                        <th>Date of Sale</th>
+                        <th>Price</th>
+                        <th>Category</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {transactions.map((transaction, index) => (
+                        <tr key={index}>
+                            <td>{transaction.productTitle}</td>
+                            <td>{transaction.productDescription}</td>
+                            <td>{new Date(transaction.dateOfSale).toLocaleDateString()}</td>
+                            <td>{transaction.price}</td>
+                            <td>{transaction.category}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+            <button onClick={prevPage} disabled={page === 1}>Previous</button>
+            <button onClick={nextPage} disabled={page * perPage >= totalCount}>Next</button>
+        </div>
+    );
+};
+
+export default TransactionsTable;
+
+
+
+import React from 'react';
+
+const Statistics = ({ stats }) => {
+    return (
+        <div>
+            <h2>Statistics</h2>
+            <p>Total Sales: ${stats.totalSales}</p>
+            <p>Total Sold Items: {stats.totalSold}</p>
+            <p>Total Not Sold Items: {stats.totalNotSold}</p>
+        </div>
+    );
+};
+
+export default Statistics;
+
+
+
+
+
+import React from 'react';
+import { Pie } from 'react-chartjs-2';
+
+const PieChart = ({ data }) => {
+    const chartData = {
+        labels: data.map(item => item.category),
+        datasets: [{
+            label: 'Number of Items',
+            data: data.map(item => item.count),
+            backgroundColor: data.map(() => `#${Math.floor(Math.random()*16777215).toString(16)}`),
+        }],
+    };
+
+    return (
+        <div>
+            <h2>Pie Chart</h2>
+            <Pie data={chartData} />
+        </div>
+    );
+};
+
+export default PieChart;
